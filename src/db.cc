@@ -96,9 +96,17 @@ class DBImpl : public DB {
     fs::create_directories(dir_);
     LoadManifest();
     RemoveOrphans();
+    uint64_t valid_bytes = 0;
     ReplayWal(WalPath(), [&](std::string_view k, std::string_view v, bool tomb) {
       Apply(k, v, tomb);
-    });
+    }, &valid_bytes);
+    // Drop a torn or corrupt tail so new records are appended directly after
+    // the last intact one. Otherwise the next replay would stop at the damaged
+    // record and silently lose every write acknowledged after this point.
+    std::error_code ec;
+    if (auto size = fs::file_size(WalPath(), ec); !ec && size > valid_bytes) {
+      fs::resize_file(WalPath(), valid_bytes);
+    }
     wal_ = std::make_unique<WalWriter>(WalPath(), opt_.sync_wal, /*truncate=*/false);
     if (mem_bytes_ >= opt_.memtable_bytes) FlushLocked();
   }

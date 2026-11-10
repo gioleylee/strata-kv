@@ -95,6 +95,12 @@ static void TestTornWalTail(const std::string& dir) {
   CHECK(!db->Get(Key(99)));  // the torn record is discarded, not half-applied
   db->Put(Key(99), "again");
   CHECK(db->Get(Key(99)) == "again");
+  // Writes made after recovering from a torn tail must survive the next
+  // restart: the torn bytes may not stay in the log ahead of them.
+  db.reset();
+  db = DB::Open(dir);
+  CHECK(db->Get(Key(99)) == "again");
+  for (int i = 0; i < 99; i++) CHECK(db->Get(Key(i)) == "value");
 }
 
 static void TestCorruptWalRecordStopsReplay(const std::string& dir) {

@@ -58,7 +58,8 @@ the overlap are not rewritten, so sequential inserts cost one flush plus one mov
 **Recovery.** On open, the manifest names the live tables; any other `.sst` file is a
 leftover from an interrupted flush or compaction and is deleted. The log is replayed up to
 the first record that is short or fails its checksum, which is how a torn final write is
-discarded rather than half-applied.
+discarded rather than half-applied. The log is then cut back to that point, so records
+appended after recovery follow the last intact one and are found by the next replay.
 
 ## Tests
 
@@ -68,7 +69,8 @@ discarded rather than half-applied.
   engine and to a `std::map`, with the database closed and reopened at random points (137
   times, across 57 compactions). Every read and a final full scan must agree with the model.
 - **Crash recovery** – unflushed writes survive a reopen via the log; a log truncated
-  mid-record loses only that record; a flipped byte stops replay at the damaged record.
+  mid-record loses only that record, and writes made after that recovery survive the next
+  restart; a flipped byte stops replay at the damaged record.
 - **Corruption detection** – a damaged data block raises an error instead of returning
   wrong data.
 - **Bloom filter** – no false negatives; measured false positive rate 0.85% at 10 bits/key.
@@ -89,6 +91,11 @@ to compare against other engines.
 | full scan | 2.18M keys/s | k-way merge over all levels |
 
 Reproduce with `./build/strata_bench 1000000 100`.
+
+The fill rows predate a durability fix: every log record is now handed to the OS before
+the write returns, instead of waiting in a user-space buffer. On the same machine that
+costs about 45% of fill throughput (175k to 96k ops/s for a 500,000-key sequential fill)
+and leaves reads and scans unchanged.
 
 ## Build
 
@@ -111,7 +118,8 @@ This is a learning-oriented engine, and the simplifications are deliberate:
 - No snapshots or MVCC, no write batches, no block cache or compression; data blocks are
   scanned linearly rather than using restart points.
 - With `sync_wal = false` (the default) the log is not fsynced per write, so an OS crash or
-  power loss can lose the most recent writes. A process crash cannot.
+  power loss can lose the most recent writes. A process crash cannot: each record is
+  flushed to the OS before the write returns.
 
 ## Layout
 

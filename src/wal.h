@@ -24,7 +24,10 @@ class WalWriter {
     put_fixed32(rec, uint32_t(buf_.size()));
     rec.append(buf_);
     file_.Write(rec);
+    // Hand every record to the OS before acknowledging the write. Left in the
+    // stdio buffer, it would be lost if the process died, not just on power loss.
     if (sync_) file_.Sync();
+    else file_.Flush();
   }
 
   void Sync() { file_.Sync(); }
@@ -36,8 +39,13 @@ class WalWriter {
 };
 
 // Calls fn(key, value, tombstone) for each intact record; returns the count.
+// `valid_bytes`, if given, receives the length of the intact prefix. The caller
+// must cut the log back to that length before appending to it: a record written
+// after a torn or corrupt one would never be reached by a later replay.
 inline size_t ReplayWal(const std::string& path,
-                        const std::function<void(std::string_view, std::string_view, bool)>& fn) {
+                        const std::function<void(std::string_view, std::string_view, bool)>& fn,
+                        uint64_t* valid_bytes = nullptr) {
+  if (valid_bytes) *valid_bytes = 0;
   FILE* probe = std::fopen(path.c_str(), "rb");
   if (!probe) return 0;
   std::fclose(probe);
@@ -58,6 +66,7 @@ inline size_t ReplayWal(const std::string& path,
     if (!decode_entry(p, p + len, k, v, tomb)) break;
     fn(k, v, tomb);
     n++;
+    if (valid_bytes) *valid_bytes += 8 + uint64_t(len);
   }
   return n;
 }
